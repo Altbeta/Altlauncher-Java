@@ -1,64 +1,63 @@
 package su.qwa.altlauncher;
 
 import javax.swing.*;
+import javax.xml.parsers.*;
 import java.awt.*;
-//import java.awt.event.ActionEvent;
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.List;
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+import java.util.zip.*;
 import org.w3c.dom.*;
 
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
+import java.time.Instant;
+import java.util.ArrayList;
 
 public class Altlauncher extends JFrame {
-	private static final long serialVersionUID = 6993467786750939603L;
-	private JTextField nicknameField;
+	private static final String VERSION = "1.2";
+    private static final String BUCKET_URL = "https://vedro.qwa.su/AltbetaRuntime/";
+    private static final String SESSION_URL = "https://altbeta.qwa.su/getsession.php";
+    private static final File ROOT = getRootPath();
+
+    private JTextField usernameField;
     private JPasswordField passwordField;
-    private JCheckBox rememberMeCheckBox;
-    private JLabel downloadLabel;
-    private final String APPDATA = System.getenv("APPDATA") + "/.altbeta";
-    private final String CLIENT_PATH = APPDATA + "/client";
-    private final String NATIVES_PATH = CLIENT_PATH + "/bin/natives";
-    private final String BIN_PATH = CLIENT_PATH + "/bin";
-    private Settings settings;
-    private final String Title = "Altlauncher rc-j0.3";
-    private final int VersionId = 2;
+    private JLabel statusLabel;
 
     public Altlauncher() {
-        setTitle(Title);
+    	Settings settings = new Settings();
+        setTitle("Altlauncher " + VERSION);
         setSize(400, 300);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
+        setResizable(false);
 
-        initComponents();
-        createDirectories();
-        checkLauncherUpdate();
-    }
+        usernameField = new JTextField(16);
+        passwordField = new JPasswordField(16);
+        statusLabel = new JLabel(" ");
+        
+        usernameField.setText(settings.lastLogin);
 
-    private void initComponents() {
-        nicknameField = new JTextField(15);
-        passwordField = new JPasswordField(15);
-        rememberMeCheckBox = new JCheckBox("Запомнить меня?");
-
-        JButton loginButton = new JButton("Начать игру");
-        loginButton.addActionListener(e -> start());
-
+        JButton launchButton = new JButton("Запуск");
+        launchButton.addActionListener(e -> launch());
         JButton settingsButton = new JButton("Настройки");
-        settingsButton.addActionListener(e -> showSettingsDialog());
+        settingsButton.addActionListener(e -> SettingsGUI.run());
 
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.insets = new Insets(5, 5, 5, 5);
-
         constraints.gridx = 0;
         constraints.gridy = 0;
-        panel.add(new JLabel("Никнейм:"), constraints);
+        panel.add(new JLabel("Ник:"), constraints);
         constraints.gridx = 1;
-        panel.add(nicknameField, constraints);
+        panel.add(usernameField, constraints);
         constraints.gridx = 0;
         constraints.gridy = 1;
         panel.add(new JLabel("Пароль:"), constraints);
@@ -67,330 +66,353 @@ public class Altlauncher extends JFrame {
         constraints.gridx = 0;
         constraints.gridy = 2;
         constraints.gridwidth = 2;
-        panel.add(rememberMeCheckBox, constraints);
+        panel.add(statusLabel, constraints);
         constraints.gridx = 0;
         constraints.gridy = 3;
         constraints.gridwidth = 1;
-        panel.add(loginButton, constraints);
-        constraints.gridx = 1;
         panel.add(settingsButton, constraints);
-
-        downloadLabel = new JLabel("Загрузка файлов...");
-        downloadLabel.setVisible(false);
-        constraints.gridy = 6;
-        panel.add(downloadLabel, constraints);
-
+        constraints.gridx = 1;
+        panel.add(launchButton, constraints);
         add(panel);
     }
-
-    private void start() {
-        String nickname = nicknameField.getText();
-        String password = new String(passwordField.getPassword());
-        authenticate(nickname, password, 13);
-    }
-
-    private void authenticate(String user, String password, int version) {
-        String url = "http://altbeta.qwa.su/game/auth.php";
-        String data = "user=" + user + "&password=" + password + "&version=" + version;
-
-        try {
-            HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
-            con.setRequestMethod("POST");
-            con.setDoOutput(true);
-            try (OutputStream os = con.getOutputStream()) {
-                os.write(data.getBytes());
-            }
-
-            if (con.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                try (BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()))) {
-                    String responseText = in.readLine();
-                    if ("Bad login".equals(responseText)) {
-                        showError("Ошибка", "Неправильное имя пользователя или пароль");
-                    } else {
-                        String[] parts = responseText.split(":");
-                        String username = parts[2];
-                        String sessionId = parts[3];
-                        if (rememberMeCheckBox.isSelected()) saveAutoLogin(user, password);
-                        initializeMinecraft(username, sessionId);
-                    }
-                }
-            } else {
-                showError("Ошибка", String.valueOf(con.getResponseCode()));
-            }
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-    private void showError(String title, String message) {
-        JOptionPane.showMessageDialog(this, message, title, JOptionPane.ERROR_MESSAGE);
-    }
-
-    private void showInfo(String title, String message) {
-        JOptionPane.showMessageDialog(this, message, title, JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    private void initializeMinecraft(String username, String sessionId) {
-        checkGameUpdate();
-        String javaExecutable = settings.javaPath.isEmpty() ? System.getenv("JAVA_HOME") + "bin/javaw.exe" : settings.javaPath;
-        String jars = String.join(";", getJarsList());
-        String jvmArguments = String.format("-Xms%s -Xmx%s -Xmn%s", settings.xms, settings.xmx, settings.xmn);
-        if (settings.useG1Gc) jvmArguments += " -XX:+UseG1GC";
-
-        String command = String.format("%s %s -Xss1m -Djava.library.path=%s -cp \"%s\" net.minecraft.client.Minecraft %s %s",
-            javaExecutable, jvmArguments, NATIVES_PATH, jars, username, sessionId);
-
-        try {
-            Runtime.getRuntime().exec(command);
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-	private List<String> getJarsList() {
-        return Arrays.asList(
-    		BIN_PATH + "/altbeta.jar",
-            BIN_PATH + "/asm-9.2.jar",
-            BIN_PATH + "/asm-tree-9.2.jar",
-            BIN_PATH + "/codecjorbis-20230120.jar",
-            BIN_PATH + "/codecwav-20101023.jar",
-            BIN_PATH + "/jinput-2.0.5.jar",
-            BIN_PATH + "/jinput-platform-2.0.5-natives-windows.jar",
-            BIN_PATH + "/json-20230311.jar",
-            BIN_PATH + "/jutils-1.0.0.jar",
-            BIN_PATH + "/launchwrapper-1.0.jar",
-            BIN_PATH + "/libraryjavasound-20101123.jar",
-            BIN_PATH + "/librarylwjglopenal-20100824.jar",
-            BIN_PATH + "/lwjgl-2.9.4.jar",
-            BIN_PATH + "/lwjgl-platform-2.9.3-natives-windows.jar",
-            BIN_PATH + "/lwjgl_util-2.9.4.jar",
-            BIN_PATH + "/rdi-1.0.jar",
-            BIN_PATH + "/soundsystem-20120107.jar"
-        );
-    }
-
-    private void showSettingsDialog() {
-        JTextField javaPathField = new JTextField(settings.javaPath, 20);
-        JTextField xmsField = new JTextField(settings.xms, 20);
-        JTextField xmxField = new JTextField(settings.xmx, 20);
-        JTextField xmnField = new JTextField(settings.xmn, 20);
-        JCheckBox g1GcCheckBox = new JCheckBox("Использовать G1GC", settings.useG1Gc);
-
-        JPanel panel = new JPanel(new GridLayout(6, 2));
-        panel.add(new JLabel("Путь к виртуальной машине Java:"));
-        panel.add(javaPathField);
-        panel.add(new JLabel("Начальный размер памяти:"));
-        panel.add(xmsField);
-        panel.add(new JLabel("Максимальный размер памяти:"));
-        panel.add(xmxField);
-        panel.add(new JLabel("Размер области нового поколения:"));
-        panel.add(xmnField);
-        panel.add(new JLabel("Сборщик мусора G1GC:"));
-        panel.add(g1GcCheckBox);
-
-        if (JOptionPane.showConfirmDialog(this, panel, "Настройки", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
-            settings.javaPath = javaPathField.getText();
-            settings.xms = xmsField.getText();
-            settings.xmx = xmxField.getText();
-            settings.xmn = xmnField.getText();
-            settings.useG1Gc = g1GcCheckBox.isSelected();
-            saveSettings();
-        }
-    }
-
-    private void saveSettings() {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(APPDATA + "/altlauncher/settings.txt"))) {
-            writer.write(String.join("\n", settings.javaPath, settings.xms, settings.xmx, settings.xmn, Boolean.toString(settings.useG1Gc)));
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-    private void loadSettings() {
-        File file = new File(APPDATA + "/altlauncher/settings.txt");
-        if (!file.exists()) {
-            settings = new Settings(System.getenv("JAVA_HOME") + "/bin/javaw.exe", "512m", "1g", "128m", false);
-            return;
-        }
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-            settings = new Settings(reader.readLine(), reader.readLine(), reader.readLine(), reader.readLine(), Boolean.parseBoolean(reader.readLine()));
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-    private void saveAutoLogin(String username, String password) {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(APPDATA + "/altlauncher/autologin.txt"))) {
-            writer.write(String.join("\n", username, password));
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-    private void loadAutoLogin() {
-        File file = new File(APPDATA + "/altlauncher/autologin.txt");
-        if (!file.exists()) return;
-
-        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-            nicknameField.setText(reader.readLine());
-            passwordField.setText(reader.readLine());
-            rememberMeCheckBox.setSelected(true);
-        } catch (IOException e) {
-            showError("Ошибка", e.getMessage());
-        }
-    }
-
-    private void createDirectories() {
-        new File(CLIENT_PATH).mkdirs();
-    }
-
-    private void checkGameUpdate() {
-        downloadLabel.setVisible(true);
-
-        try {
-            List<String> localFiles = getFileList(new File(BIN_PATH));
-            List<String> serverFiles = getFileListFromServer("http://a0914225.xsph.ru/altbeta-files/");
-
-            for (String file : serverFiles) {
-                if (!localFiles.contains(file)) {
-                    if (file.endsWith("/")) {
-                        createDirectory(BIN_PATH, file);
-                    } else {
-                        downloadFile(file, BIN_PATH);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            showError("Ошибка", e.getMessage());
-        }
-
-        downloadLabel.setVisible(false);
-    }
-
-    private void createDirectory(String basePath, String dir) {
-        File directory = new File(basePath + File.separator + dir);
-        if (!directory.exists()) {
-            directory.mkdirs();
-        }
-    }
-
-
-    private List<String> getFileList(File dir) {
-        List<String> fileList = new ArrayList<>();
-        if (dir.exists()) {
-            File[] files = dir.listFiles();
-            if (files != null) {
-                for (File file : files) {
-                    if (file.isFile()) fileList.add(file.getName());
-                }
-            }
-        }
-        return fileList;
-    }
-
-    private List<String> getFileListFromServer(String url) throws Exception {
-        List<String> fileList = new ArrayList<>();
-
-        HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
-        con.setRequestMethod("GET");
-        if (con.getResponseCode() == HttpURLConnection.HTTP_OK) {
-            DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
-            Document doc = builder.parse(con.getInputStream());
-            NodeList nodes = doc.getElementsByTagName("Key");
-            for (int i = 0; i < nodes.getLength(); i++) {
-                fileList.add(nodes.item(i).getTextContent());
-            }
-        }
-        return fileList;
-    }
     
-    // спасеба chatgpt потому что я ленивая ж
-    private void downloadFile(String filePath, String basePath) {
+    private static void runCLI() {
         try {
-            URL url = new URL("http://a0914225.xsph.ru/altbeta-files/" + filePath);
-            HttpURLConnection con = (HttpURLConnection) url.openConnection();
-            con.setRequestMethod("HEAD");
-            long serverLastModified = con.getLastModified();
+            Settings settings = new Settings();
+            Console console = System.console();
+            String username;
+            char[] passwordChars;
 
-            File outFile = new File(basePath + File.separator + filePath);
-            if (outFile.exists()) {
-                long localLastModified = outFile.lastModified();
-                if (localLastModified >= serverLastModified) {
-                    // Файл уже обновлен, скачивать не нужно
-                    return;
-                }
+            // Ввод логина и пароля
+            if (console != null) {
+                username = console.readLine("Ник: ");
+                passwordChars = console.readPassword("Пароль: ");
+            } else {
+                System.out.print("Ник: ");
+                username = new Scanner(System.in).nextLine();
+                System.out.print("Пароль: ");
+                passwordChars = new Scanner(System.in).nextLine().toCharArray();
             }
+            String password = new String(passwordChars);
+            Arrays.fill(passwordChars, ' ');
 
-            // Скачивание файла, если он отсутствует или старый
-            InputStream in = url.openStream();
-            outFile.getParentFile().mkdirs();
-            Files.copy(in, outFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            in.close();
+            // Сохраняем логин
+            settings.lastLogin = username;
+            settings.save();
+
+            // Процесс запуска
+            System.out.println("Авторизация...");
+            String session = Authenticator.getSession(username, password);
             
-            // Установить дату последнего изменения
-            if (serverLastModified > 0) {
-                outFile.setLastModified(serverLastModified);
-            }
-        } catch (IOException e) {
-            showError("Ошибка загрузки файла", e.getMessage());
-        }
-    }
-
-
-
-    private void checkLauncherUpdate() {
-        try {
-            HttpURLConnection con = (HttpURLConnection) new URL("http://a0914225.xsph.ru/altbeta-launcherVersions/index.xml").openConnection();
-            con.setRequestMethod("GET");
-            if (con.getResponseCode() == HttpURLConnection.HTTP_OK) {
-                DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
-                Document doc = builder.parse(con.getInputStream());
-                int latestVersion = Integer.parseInt(doc.getElementsByTagName("id").item(0).getTextContent());
-
-                if (VersionId < latestVersion) {
-//                    if (JOptionPane.showConfirmDialog(this, "Доступна новая версия лаунчера. Обновить?", "Обновление", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
-//                        downloadLauncherUpdate();
-//                        showInfo("Информация", "Перезапустите лаунчер для применения обновления.");
-//                        System.exit(0);
-//                    }
-                	showInfo("Информация", "Доступно обновление лаунчера, пожалуйста скачайте его с сайта");
-                }
-            }
+            System.out.println("Загрузка файлов...");
+            Downloader.downloadAll();
+            
+            System.out.println("Запуск клиента...");
+            Launcher.run(session, username);
+            
+            System.out.println("Клиент запущен.");
         } catch (Exception e) {
-            showError("Ошибка", e.getMessage());
+            System.err.println("Ошибка: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
-    private void downloadLauncherUpdate() throws IOException {
-        String url = "http://altbeta.qwa.su/game/launcher.jar";
-        try (InputStream in = new URL(url).openStream()) {
-            Files.copy(in, Paths.get(APPDATA, "altlauncher.jar"), StandardCopyOption.REPLACE_EXISTING);
-        }
+    private void launch() {
+        Settings settings = new Settings();
+        String username = usernameField.getText();
+        String password = new String(passwordField.getPassword());
+        settings.lastLogin = username;
+        settings.save();
+
+        new Thread(() -> {
+            try {
+                status("Авторизация...");
+                String session = Authenticator.getSession(username, password);
+                status("Загрузка файлов...");
+                Downloader.downloadAll();
+                status("Запуск клиента...");
+                Launcher.run(session, username);
+                status("Клиент запущен.");
+            } catch (Exception e) {
+                e.printStackTrace();
+                JOptionPane.showMessageDialog(null, e, "Ошибка: " + e.getMessage(), JOptionPane.ERROR_MESSAGE);
+            }
+        }).start();
+    }
+
+    private void status(String msg) {
+        SwingUtilities.invokeLater(() -> statusLabel.setText(msg));
+    }
+
+    private static File getRootPath() {
+        String os = System.getProperty("os.name").toLowerCase();
+        String path = os.contains("win")
+                ? System.getenv("APPDATA") + "\\.altbeta\\runtime"
+                : System.getProperty("user.home") + "/.altbeta/runtime";
+        File dir = new File(path);
+        if (!dir.exists()) dir.mkdirs();
+        return dir;
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            Altlauncher launcher = new Altlauncher();
-            launcher.setVisible(true);
-            launcher.loadSettings();
-            launcher.loadAutoLogin();
-        });
-    }
-
-    static class Settings {
-        String javaPath;
-        String xms;
-        String xmx;
-        String xmn;
-        boolean useG1Gc;
-
-        Settings(String javaPath, String xms, String xmx, String xmn, boolean useG1Gc) {
-            this.javaPath = javaPath;
-            this.xms = xms;
-            this.xmx = xmx;
-            this.xmn = xmn;
-            this.useG1Gc = useG1Gc;
+        if (args.length > 0 && args[0].equalsIgnoreCase("nogui")) {
+            runCLI();
+        } else {
+            SwingUtilities.invokeLater(() -> new Altlauncher().setVisible(true));
         }
     }
+
+    // -------------------- Authenticator --------------------
+    static class Authenticator {
+        public static String getSession(String username, String password) throws IOException {
+            HttpURLConnection conn = (HttpURLConnection) new URL(SESSION_URL).openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.getOutputStream().write(("username=" + URLEncoder.encode(username, "UTF-8")
+                    + "&password=" + URLEncoder.encode(password, "UTF-8")).getBytes());
+
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                return in.readLine();
+            }
+        }
+    }
+
+    // -------------------- Downloader --------------------
+    public static class Downloader {
+        private static class FileInfo {
+            private final String key;
+            private final Instant lastModified;
+
+            public FileInfo(String key, Instant  lastModified) {
+                this.key = key;  
+                this.lastModified = lastModified;
+            }
+
+            public String getKey() {
+                return key;
+            }
+
+            public Instant getLastModified() {
+                return lastModified;
+            }
+        }
+
+        public static void downloadAll() throws Exception {
+            List<FileInfo> files = new ArrayList<>();
+            HttpURLConnection conn = (HttpURLConnection) new URL(BUCKET_URL).openConnection();
+            try (InputStream in = conn.getInputStream()) {
+                Document doc = DocumentBuilderFactory.newInstance()
+                        .newDocumentBuilder()
+                        .parse(in);
+                NodeList contents = doc.getElementsByTagName("Contents");
+                for (int i = 0; i < contents.getLength(); i++) {
+                    Element el = (Element) contents.item(i);
+                    String key = el.getElementsByTagName("Key")
+                            .item(0)
+                            .getTextContent()
+                            .trim();
+                    String lastModifiedStr = el.getElementsByTagName("LastModified")
+                            .item(0)
+                            .getTextContent()
+                            .trim();
+                    Instant lastModified = Instant.parse(lastModifiedStr);
+                    files.add(new FileInfo(key, lastModified));
+                }
+            }
+
+            for (FileInfo fileInfo : files) {
+                String fileKey = fileInfo.getKey();
+                Instant cloudLastModified = fileInfo.getLastModified();
+
+                File outFile = new File(ROOT, fileKey.replace("/", File.separator));
+                if (!outFile.getParentFile().exists()) {
+                    outFile.getParentFile().mkdirs();
+                }
+
+                boolean shouldDownload = !outFile.exists();
+
+                if (outFile.exists()) {
+                    Instant localLastModified = Instant.ofEpochMilli(outFile.lastModified());
+                    if (cloudLastModified.isAfter(localLastModified)) {
+                        shouldDownload = true;
+                    }
+                }
+
+                if (shouldDownload) {
+                    URL url = new URL(BUCKET_URL + URLEncoder.encode(fileKey, "UTF-8"));
+                    try (InputStream in = url.openStream();
+                         FileOutputStream out = new FileOutputStream(outFile)) {
+                        in.transferTo(out);
+                    }
+                    // Обновляем дату модификации файла
+                    outFile.setLastModified(cloudLastModified.toEpochMilli());
+                }
+            }
+        }
+    }
+
+
+    // -------------------- Launcher --------------------
+    static class Launcher {
+        public static void run(String session, String username) throws IOException {
+            Settings settings = new Settings();
+
+            List<String> libs = new ArrayList<>();
+            File[] all = ROOT.listFiles();
+            for (File file : all) {
+                if (file.getName().endsWith(".jar") && !file.getName().equals("deobfuscated.jar"))
+                    libs.add(file.getAbsolutePath());
+            }
+
+            String classpath = String.join(File.pathSeparator, libs) + File.pathSeparator +
+                    new File(ROOT, "deobfuscated.jar").getAbsolutePath();
+
+            List<String> cmd = new ArrayList<>();
+            cmd.add(settings.javaPath);
+            cmd.add("-Xms" + settings.xms);
+            cmd.add("-Xmx" + settings.xmx);
+            if (settings.useG1Gc) cmd.add("-XX:+UseG1GC");
+            cmd.add("-Djava.library.path=" + new File(ROOT, "natives").getAbsolutePath());
+            cmd.add("-cp");
+            cmd.add(classpath);
+            cmd.add("net.minecraft.client.Minecraft");
+            cmd.add(username);
+            cmd.add(session);
+            
+            System.out.println(cmd);
+
+            new ProcessBuilder(cmd)
+                    .directory(ROOT)
+                    .inheritIO()
+                    .start();
+        }
+    }
+    
+    // -------------------- Settings --------------------
+    static class Settings {
+        public String javaPath = "java";
+        public String xms = "1024m";
+        public String xmx = "1024m";
+        public boolean useG1Gc = true;
+        public String lastLogin = "";
+
+        public Settings() {
+            File file = new File(ROOT, "settings.txt");
+            if (!file.exists()) return;
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                for (String line; (line = reader.readLine()) != null; ) {
+                    String[] kv = line.split("=");
+                    if (kv.length != 2) continue;
+                    switch (kv[0].trim()) {
+	                    case "javaPath":
+	                        javaPath = kv[1].trim();
+	                        break;
+	                    case "xms":
+	                        xms = kv[1].trim();
+	                        break;
+	                    case "xmx":
+	                        xmx = kv[1].trim();
+	                        break;
+	                    case "useG1Gc":
+	                        useG1Gc = Boolean.parseBoolean(kv[1].trim());
+	                        break;
+	                    case "lastLogin":
+	                    	lastLogin = kv[1].trim();
+	                        break;
+	                    // возможно, default:
+                    }
+                }
+            } catch (IOException ignored) {}
+        }
+        
+        public void save() {
+            File file = new File(ROOT, "settings.txt");
+            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+                writer.println("javaPath=" + javaPath);
+                writer.println("xms=" + xms);
+                writer.println("xmx=" + xmx);
+                writer.println("useG1Gc=" + useG1Gc);
+                writer.println("lastLogin=" + lastLogin);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    // -------------------- SettingsGUI --------------------
+    static class SettingsGUI extends JFrame {
+        private JTextField javaPathField;
+        private JTextField xmsField;
+        private JTextField xmxField;
+        private JCheckBox g1gcCheckBox;
+
+        public SettingsGUI() {
+            setTitle("Настройки");
+            setSize(400, 250);
+            setLocationRelativeTo(null);
+            setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+            setResizable(false);
+
+            Settings settings = new Settings();
+
+            javaPathField = new JTextField(settings.javaPath, 16);
+            xmsField = new JTextField(settings.xms, 16);
+            xmxField = new JTextField(settings.xmx, 16);
+            g1gcCheckBox = new JCheckBox("Использовать G1GC", settings.useG1Gc);
+
+            JButton saveButton = new JButton("Сохранить");
+            saveButton.addActionListener(e -> saveSettings());
+
+            JPanel panel = new JPanel(new GridBagLayout());
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(5, 5, 5, 5);
+            gbc.anchor = GridBagConstraints.WEST;
+
+            gbc.gridx = 0; gbc.gridy = 0;
+            panel.add(new JLabel("Путь к Java:"), gbc);
+            gbc.gridx = 1;
+            panel.add(javaPathField, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 1;
+            panel.add(new JLabel("Xms (минимум памяти):"), gbc);
+            gbc.gridx = 1;
+            panel.add(xmsField, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 2;
+            panel.add(new JLabel("Xmx (максимум памяти):"), gbc);
+            gbc.gridx = 1;
+            panel.add(xmxField, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 2;
+            panel.add(g1gcCheckBox, gbc);
+
+            gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
+            gbc.anchor = GridBagConstraints.CENTER;
+            panel.add(saveButton, gbc);
+
+            add(panel);
+        }
+
+        private void saveSettings() {
+        	Settings currentSettings = new Settings();
+        	currentSettings.javaPath = javaPathField.getText().trim();
+            currentSettings.xms = xmsField.getText().trim();
+            currentSettings.xmx = xmxField.getText().trim();
+            currentSettings.useG1Gc = g1gcCheckBox.isSelected();
+
+            File file = new File(ROOT, "settings.txt");
+
+            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+            	currentSettings.save();
+                JOptionPane.showMessageDialog(this, "Настройки сохранены.", "Успех", JOptionPane.INFORMATION_MESSAGE);
+            } catch (IOException e) {
+                JOptionPane.showMessageDialog(this, "Ошибка сохранения настроек: " + e.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+
+        public static void run() {
+            SwingUtilities.invokeLater(() -> new SettingsGUI().setVisible(true));
+        }
+    }
+
 }
